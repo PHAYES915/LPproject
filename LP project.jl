@@ -1,4 +1,5 @@
-using Simplex
+include("Simplex.jl")
+using .Simplex
  c = []
  x = String[]
  b = Float64[]
@@ -22,7 +23,7 @@ using Simplex
     end
     # println("c: $c")
     for i in 1:n
-        b[i] = round(2rand() - 1, digits = 3)
+        b[i] = round(rand(), digits = 3)
     end
     # println("b: $b")
     
@@ -30,8 +31,8 @@ using Simplex
         x[i] = "x$i"
     end
     # println("x: $x")
-    basic_variables = collect(1:m)
-    nonbasic_variables = collect(m+1:m+n)
+    basic_variables = collect(m+1:m+n)
+    nonbasic_variables = collect(1:m)
     return A, b, c, x, basic_variables, nonbasic_variables
  end
 
@@ -101,11 +102,43 @@ mutable struct Dictionary
 end
 
 
-A, m, n = matrix_create(n = 6, m = 5)
-A, b, c, x, basic_variables, nonbasic_variables = initialize(c = [1.0,2.0,3.0,4.0,5.0], b = [4.0,5.0,6.0,7.0,8.0, 9.0], A = A, m = m, n = n)
+A, m, n = matrix_create(n = 20, m = 20)
+A, b, c, x, basic_variables, nonbasic_variables = initialize(c = zeros(20), b = zeros(20), A = A, m = m, n = n)
 //#println("Algebraic LP Formulation:")
 algebraic_lp(c = c, b = b, A = A, x = x)
 //#println("Initial Dictionary:")
 D = Dictionary(A, b, c, basic_variables, nonbasic_variables, 0.0)
-Solve_lp(D)
+#Simplex.Solve_lp(D)
 
+using JuMP, HiGHS
+
+# Save the original dictionary before your solver changes it.
+original = deepcopy(D)
+
+model = Model(HiGHS.Optimizer)
+set_silent(model)
+
+n = length(original.c)
+@variable(model, x[1:n] >= 0)
+@constraint(model, original.A * x .<= original.b)
+
+# Your pivot code uses ζ = ζ₀ - c'x.
+@objective(model, Max,
+    original.objective_value -
+    sum(original.c[j] * x[j] for j in 1:n)
+)
+
+optimize!(model)
+
+if is_solved_and_feasible(model)
+    Simplex.Solve_lp(D)
+
+    reference = objective_value(model)
+    println("HiGHS objective: ", reference)
+    println("Your objective:  ", D.objective_value)
+
+    @assert isapprox(D.objective_value, reference;
+                     atol = 1e-6, rtol = 1e-6) "Objective mismatch"
+else
+    println("HiGHS status: ", termination_status(model))
+end
